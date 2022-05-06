@@ -4,71 +4,82 @@
 #include <stdlib.h>
 #include <sys/wait.h>
 #include <fcntl.h>
+#include <sys/types.h>
+#include <sys/uio.h>
+#include <unistd.h>
+#include <assert.h>
 
-int fork_or_exit()
+int fork_or_die()
 {
     int rc = fork();
-    if (rc < 0)
-    {
-        fprintf(stderr, "[%i] fork() failed (%i)\n", getpid(), errno);
-        exit(1);
-    }
+    assert(rc >= 0);
     return rc;
 }
 
-// Mimic the following
-// $ echo "hello\nworld" | wc -l
-//     2
+// Output:
+// [5805] I am child 1
+// [5804] I am the parent
+// [5806] I am child 2
+//       17
+// [5804] Parent exiting
 int main(int argc, char *argv[])
 {
-    char buffer_fn[] = "/tmp/tmp.ostep-cpu-api-q8";
-    int rc_b = fork_or_exit();
-    if (rc_b == 0)
+    int pipefd[2];
+    assert(pipe(pipefd) == 0);
+
+    pid_t pid_child1;
+    pid_t pid_child2;
+
+    // (the argument list should be terminated by a null pointer)
+    char *cmd0[] = {"ls", "-la", NULL};
+    char *cmd1[] = {"wc", "-l", NULL};
+
+    if ((pid_child1 = fork_or_die()) == 0)
     {
-        fprintf(stdout, "[%i] i am b\n", getpid());
-        close(STDOUT_FILENO);
-        if (open(buffer_fn, O_WRONLY | O_CREAT | O_TRUNC, S_IRWXU) < 0)
-        {
-            fprintf(stderr, "[%i] open() failed (%i)\n", getpid(), errno);
-        }
-        // exec should now WRITE to above file
-        execl("/bin/echo", "/bin/echo", "'ello\nworld'", NULL);
+        // Child 1 code (left-end of pipe)
+        fprintf(stdout, "[%i] I am child 1\n", getpid());
+
+        // Copy the pipe write-end fd to stdout (now stdout is set to write-end of pipe)
+        dup2(pipefd[1], STDOUT_FILENO);
+
+        // Commenting out the below 2 lines doesn't affect the output, but through experience
+        // seems to reduce unexpected behavior
+        close(pipefd[0]);
+        close(pipefd[1]);
+
+        // fprintf(stdout, "I am child 1, my PID is %i!", getpid());
+        execvp(cmd0[0], cmd0);
     }
     else
     {
-        int rc_c = fork_or_exit();
-        if (rc_c == 0)
+        if ((pid_child2 = fork_or_die()) == 0)
         {
-            fprintf(stdout, "[%i] i am c\n", getpid());
-            close(STDIN_FILENO);
-            if (open(buffer_fn, O_RDONLY, S_IRWXU) < 0)
-            {
-                fprintf(stderr, "[%i] open() failed (%i)\n", getpid(), errno);
-            }
-            // exec should now READ from the above file
-            execl("/usr/bin/wc", "/usr/bin/wc", "-l", NULL);
+            // Child 2 code (right-end of pipe)
+            fprintf(stdout, "[%i] I am child 2\n", getpid());
+
+            // Copy read-end pipe fd to stdin (now stdin is the pipe read-end)
+            dup2(pipefd[0], STDIN_FILENO);
+
+            // Note: Here and in the parent process, if you don't close the write-end of the pipe, the process
+            // hangs at "I am child 2" – but it doesn't happen in child 1 ..
+            close(pipefd[0]);
+            close(pipefd[1]);
+
+            execvp(cmd1[0], cmd1);
         }
         else
         {
-            fprintf(stdout, "[%i] i am a\n", getpid());
+            // Parent code
+            close(pipefd[0]);
+            close(pipefd[1]);
 
-            // how am I creating this array without allocating memory?
-            int desc[2];
+            fprintf(stdout, "[%i] I am the parent\n", getpid());
 
-            // How can I obtain the references to the file descriptors of each process?
-            // int desc[2];
-            // desc[0] = ?;
-            // desc[1] = ?;
-            // if (pipe(desc) < 0)
-            // {
-            //     fprintf(stderr, "[%i] pipe() failed (%i)\n", getpid(), errno);
-            //     exit(1);
-            // }
-            if (wait(NULL) < 0)
-            {
-                fprintf(stderr, "[%i] wait() failed (%i)\n", getpid(), errno);
-                exit(1);
-            }
+            waitpid(pid_child1, NULL, WUNTRACED);
+            waitpid(pid_child2, NULL, WUNTRACED);
+
+            fprintf(stdout, "[%i] Parent exiting\n", getpid());
         }
     }
+    return 0;
 }

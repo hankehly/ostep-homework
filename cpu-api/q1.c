@@ -7,8 +7,8 @@ int main(int argc, char *argv[])
 {
     int x = 100;
     fprintf(stdout, "[%i][1] %i\n", getpid(), x);
-    int rc = fork();
-    if (rc == -1)
+    pid_t rc;
+    if ((rc = fork()) == -1)
     {
         fprintf(stderr, "[%i][2] fork failed\n", getpid());
         exit(1);
