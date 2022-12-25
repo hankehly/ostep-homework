@@ -26,10 +26,9 @@ int main(int argc, char *argv[])
 {
     int pipefd[2];
     assert(pipe(pipefd) == 0);
+    pid_t pid_child1, pid_child2;
 
-    pid_t pid_child1;
-    pid_t pid_child2;
-
+    // Note:
     // Each process has a fixed size file descriptor table.
     // Entries are numbered as integers starting at 0.
     // The following code prints:
@@ -45,54 +44,50 @@ int main(int argc, char *argv[])
     fprintf(stdout, "%i - STDERR_FILENO\n", STDERR_FILENO);
     fprintf(stdout, "%i - pipe (read end)\n", pipefd[0]);
     fprintf(stdout, "%i - pipe (write end)\n", pipefd[1]);
-    // The following shows 122880 (that's a lot of file descriptors)
+    // The following shows 122880 on macOS (that's a lot of file descriptors)
     fprintf(stdout, "The size of the descriptor table is %i\n", getdtablesize());
-
-    // (the argument list should be terminated by a null pointer)
-    char *cmd0[] = {"ls", "-la", NULL};
-    char *cmd1[] = {"wc", "-l", NULL};
 
     if ((pid_child1 = fork_or_die()) == 0)
     {
-        // Child 1 code (write-end of pipe)
+        // Child 1 code (producer)
         fprintf(stdout, "[%i] I am child 1\n", getpid());
 
-        // Copy the pipe's write-end value to the standard output value.
-        // Now the program will use the pipe write-end as the output sink.
+        // We aren't reading from the pipe in this process, so close the read end.
+        close(pipefd[0]);
+
+        // Tell the OS use the write-end of the pipe as standard out by
+        // copying the pipe's write-end fd to the standard output fd location.
         dup2(pipefd[1], STDOUT_FILENO);
 
         // Closing the original pipe file descriptors here does not affect stdout because
         // we already copied the pipe's write-end file descriptor to the stdout location.
         // This code will just close the original file descriptors.
-        close(pipefd[0]);
         close(pipefd[1]);
 
         // Execute a command, write to the pipe sink (which is set to stdout in this child process)
         // Running execvp will replace the current "process image" so you can't continue to run
         // commands afterwards (the process content has been changed to cmd0!)
-        execvp(cmd0[0], cmd0);
+        execlp("ls", "ls", "-la", NULL);
     }
     else
     {
         if ((pid_child2 = fork_or_die()) == 0)
         {
-            // Child 2 code (read-end of pipe)
+            // Child 2 code (consumer)
             fprintf(stdout, "[%i] I am child 2\n", getpid());
+
+            // Why does not closing the write-end of the pipe cause the program to hang at execvp?
+            // If write end is not closed, read will keep on hanging, but what is reading from child2?
+            close(pipefd[1]);
 
             // Copy read-end pipe fd to stdin (now stdin is the pipe read-end)
             dup2(pipefd[0], STDIN_FILENO);
 
+            // We're done with the read end of the pipe (copied to stdin), so close it to
+            // release resources.
             close(pipefd[0]);
-            // Why does not closing the write-end of the pipe cause the program to hang at execvp?
-            close(pipefd[1]);
 
-            execvp(cmd1[0], cmd1);
-
-            // We could alternatively print the output of child1 execvp by reading from the
-            // pipe's read-end (which is copied to to stdin above)
-            // char *buf[50];
-            // read(STDIN_FILENO, buf, sizeof(buf));
-            // write(STDOUT_FILENO, buf, sizeof(buf));
+            execlp("wc", "wc", "-l", NULL);
 
             // Note: This won't even get executed because execvp replaces the process image
             // fprintf(stdout, "foo\n");
@@ -100,15 +95,13 @@ int main(int argc, char *argv[])
         else
         {
             // Parent code
+            // 
             close(pipefd[0]);
             // Why does not closing the write-end of the pipe cause the program to hang at child2 execvp?
             close(pipefd[1]);
-
             fprintf(stdout, "[%i] I am the parent\n", getpid());
-
             waitpid(pid_child1, NULL, WUNTRACED);
             waitpid(pid_child2, NULL, WUNTRACED);
-
             fprintf(stdout, "[%i] Parent exiting\n", getpid());
         }
     }
