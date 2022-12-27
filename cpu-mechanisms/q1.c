@@ -40,6 +40,9 @@ int main(int argc, char *argv[])
     //
     // 2. Measure cost of context switch
     //
+    //  I found that on a single-core amd64 linux machine, the average time was about 6 microseconds.
+    //  This is consistent with a google search for "how long does a context switch take?" (it said about 5 microseconds)
+    //
     printf("\n2. Measure cost of context switch\n");
 
     int n_iter = 10000;
